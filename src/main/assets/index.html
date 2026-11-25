@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#101827">
+<title>LUDO STAR — Playable Prototype</title>
+<style>
+:root{--bg:#101827;--panel:#1c293b;--gold:#ffd36a;--muted:#aebbd0}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top,#263a54,#101827 65%);color:#fff;font-family:system-ui,-apple-system,Segoe UI,sans-serif;min-height:100vh}
+main{max-width:620px;margin:auto;padding:16px}
+header{text-align:center;padding:8px 0 14px}h1{margin:0;color:var(--gold);font-size:clamp(30px,8vw,42px);letter-spacing:3px;text-shadow:0 3px 18px #ffbb4470}
+.sub{color:var(--muted);font-size:13px;margin-top:3px}
+.panel{background:#1c293beF;border:1px solid #ffffff18;border-radius:18px;padding:13px;box-shadow:0 12px 35px #0005}
+.topline{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
+.turn{font-weight:800;font-size:15px}.turn span{color:var(--gold)}
+#status{font-size:12px;color:var(--muted);text-align:right;max-width:58%}
+canvas{display:block;width:100%;height:auto;touch-action:manipulation;border-radius:14px;background:#f4f0e7}
+.controls{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+button{border:0;border-radius:13px;padding:14px 12px;font-weight:800;font-size:15px;cursor:pointer;color:#152033;background:linear-gradient(180deg,#ffe49a,#ffc54d);box-shadow:0 4px 0 #b77a20}
+button:disabled{opacity:.45;cursor:not-allowed;box-shadow:none}
+#dice{font-size:24px;letter-spacing:2px}
+.secondary{background:#34445b;color:white;box-shadow:0 4px 0 #1b2636}
+.legend{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:12px}
+.player{border-radius:10px;padding:8px 4px;text-align:center;font-size:11px;font-weight:800;border:2px solid transparent}
+.player.active{border-color:white;box-shadow:0 0 0 2px var(--gold)}
+.note{font-size:12px;color:var(--muted);line-height:1.5;margin:12px 2px 0}
+footer{text-align:center;color:#8191a8;font-size:11px;padding:16px 0}
+@media(max-width:380px){main{padding:10px}.panel{padding:9px}.controls button{font-size:13px;padding:12px 6px}}
+</style>
+</head>
+<body>
+<main>
+<header><h1>LUDO STAR</h1><div class="sub">MOBILE PLAYABLE PROTOTYPE · VERSION 0.1</div></header>
+<section class="panel">
+ <div class="topline"><div class="turn" id="turn">RED'S TURN</div><div id="status">Roll the dice to begin.</div></div>
+ <canvas id="board" width="720" height="720" aria-label="Ludo board"></canvas>
+ <div class="controls">
+  <button id="roll"><span id="dice">🎲</span> ROLL DICE</button>
+  <button id="new" class="secondary">↻ NEW GAME</button>
+ </div>
+ <div class="legend" id="legend"></div>
+ <div class="note">How to play: Roll a 6 to bring a token out of base. Tap a highlighted token to move it. Roll a 6 or capture an opponent to earn another turn. Reach the centre with all 4 tokens to win. Pass the phone between players for local multiplayer.</div>
+</section>
+<footer>Original LUDO STAR prototype · Local pass-and-play · No account required</footer>
+</main>
+<script>
+(() => {
+const canvas=document.getElementById('board'),ctx=canvas.getContext('2d');
+const rollBtn=document.getElementById('roll'),newBtn=document.getElementById('new');
+const diceEl=document.getElementById('dice'),statusEl=document.getElementById('status'),turnEl=document.getElementById('turn'),legend=document.getElementById('legend');
+const W=720,C=360, colors=['#e84b4b','#25a86b','#f1c232','#3978df'];
+const names=['RED','GREEN','YELLOW','BLUE'];
+// A 52-space loop around the centre; each player has a six-space home lane.
+const track=[];
+for(let i=0;i<52;i++){const a=(-Math.PI/2)+(i/52)*Math.PI*2;track.push({x:C+Math.cos(a)*222,y:C+Math.sin(a)*222});}
+const starts=[0,13,26,39];
+const lanes=[
+ Array.from({length:6},(_,i)=>({x:360,y:282-i*28})),
+ Array.from({length:6},(_,i)=>({x:438+i*28,y:360})),
+ Array.from({length:6},(_,i)=>({x:360,y:438+i*28})),
+ Array.from({length:6},(_,i)=>({x:282-i*28,y:360}))
+];
+const bases=[
+ [{x:95,y:95},{x:165,y:95},{x:95,y:165},{x:165,y:165}],
+ [{x:555,y:95},{x:625,y:95},{x:555,y:165},{x:625,y:165}],
+ [{x:555,y:555},{x:625,y:555},{x:555,y:625},{x:625,y:625}],
+ [{x:95,y:555},{x:165,y:555},{x:95,y:625},{x:165,y:625}]
+];
+let players,turn,rolled,die,valid,finished,gameOver;
+function reset(){players=names.map((n,p)=>({tokens:Array(4).fill(-1),done:0}));turn=0;rolled=false;die=0;valid=[];finished=[];gameOver=false;diceEl.textContent='🎲';setStatus('Roll the dice to begin.');render();}
+function setStatus(s){statusEl.textContent=s;}
+function pos(p,t){
+ const v=players[p].tokens[t];
+ if(v===-1)return bases[p][t];
+ if(v===58)return {x:C,y:C};
+ if(v>=52)return lanes[p][v-52];
+ return track[(starts[p]+v)%52];
+}
+function drawCell(x,y,r,fill,stroke='#d9d2c4'){ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fillStyle=fill;ctx.fill();ctx.lineWidth=3;ctx.strokeStyle=stroke;ctx.stroke();}
+function render(){
+ ctx.clearRect(0,0,W,W);
+ ctx.fillStyle='#f5f0e5';ctx.fillRect(0,0,W,W);
+ // Four home quarters
+ const quads=[{x:28,y:28,c:0},{x:472,y:28,c:1},{x:472,y:472,c:2},{x:28,y:472,c:3}];
+ quads.forEach(q=>{ctx.fillStyle=colors[q.c];roundRect(q.x,q.y,220,220,28);ctx.fill();ctx.fillStyle='#ffffff';roundRect(q.x+38,q.y+38,144,144,22);ctx.fill();bases[q.c].forEach(b=>drawCell(b.x,b.y,20,'#e8e4dc','#c9c2b5'));});
+ // Track loop
+ track.forEach((p,i)=>{const owner=starts.indexOf(i);drawCell(p.x,p.y,14,owner>=0?colors[owner]:'#fff','#c9c2b5');});
+ // Home lanes
+ lanes.forEach((lane,p)=>lane.forEach((q,i)=>drawCell(q.x,q.y,13,i===5?colors[p]:'#fff','#c9c2b5')));
+ // centre
+ ctx.beginPath();ctx.arc(C,C,43,0,Math.PI*2);ctx.fillStyle='#26364c';ctx.fill();ctx.strokeStyle='#d6ad50';ctx.lineWidth=5;ctx.stroke();
+ ctx.fillStyle='#ffe19a';ctx.font='bold 18px system-ui';ctx.textAlign='center';ctx.fillText('STAR',C,C+6);
+ // token positions; slight offsets when sharing a space
+ const all=[];
+ players.forEach((pl,p)=>pl.tokens.forEach((v,t)=>{if(v!==-1&&v<58)all.push({p,t,v});}));
+ players.forEach((pl,p)=>pl.tokens.forEach((v,t)=>{
+   const q=pos(p,t);let same=all.filter(a=>a.p===p&&a.v===v&&v!==-1&&v<58);let idx=same.findIndex(a=>a.t===t);
+   let ox=same.length>1?(idx%2?9:-9):0,oy=same.length>1?(idx>1?9:-9):0;
+   const x=q.x+ox,y=q.y+oy;
+   ctx.beginPath();ctx.arc(x,y,20,0,Math.PI*2);ctx.fillStyle=colors[p];ctx.fill();ctx.lineWidth=4;ctx.strokeStyle=valid.includes(t)&&p===turn?'#fff36a':'#fff';ctx.stroke();
+   ctx.beginPath();ctx.arc(x-5,y-6,6,0,Math.PI*2);ctx.fillStyle='#ffffff88';ctx.fill();
+   ctx.fillStyle='#fff';ctx.font='bold 15px system-ui';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(String(t+1),x,y+1);
+   if(valid.includes(t)&&p===turn){ctx.beginPath();ctx.arc(x,y,27,0,Math.PI*2);ctx.strokeStyle='#ffcf48';ctx.lineWidth=4;ctx.stroke();}
+ }));
+ turnEl.innerHTML=`<span style="color:${colors[turn]}">${names[turn]}'S TURN</span>`;
+ [...legend.children].forEach((el,i)=>el.classList.toggle('active',i===turn));
+ rollBtn.disabled=rolled||gameOver;
+}
+function roundRect(x,y,w,h,r){ctx.beginPath();ctx.roundRect(x,y,w,h,r);}
+function legalMoves(p,d){
+ const out=[];
+ players[p].tokens.forEach((v,t)=>{
+  if(v===-1){if(d===6)out.push(t);}
+  else if(v<58 && v+d<=58)out.push(t);
+ });
+ return out;
+}
+function nextTurn(extra=false){if(!extra)turn=(turn+1)%4;rolled=false;valid=[];render();}
+function roll(){
+ if(rolled||gameOver)return;
+ die=Math.floor(Math.random()*6)+1;diceEl.textContent=['⚀','⚁','⚂','⚃','⚄','⚅'][die-1];
+ valid=legalMoves(turn,die);rolled=true;
+ if(valid.length===0){setStatus(`${names[turn]} rolled ${die}. No legal move.`);render();setTimeout(()=>{if(rolled&&!gameOver)nextTurn(die===6);},950);}
+ else setStatus(`${names[turn]} rolled ${die}. Tap a glowing token.`);
+ render();
+}
+function move(t){
+ if(!rolled||!valid.includes(t)||gameOver)return;
+ let v=players[turn].tokens[t];
+ if(v===-1)v=0;else v+=die;
+ players[turn].tokens[t]=v;
+ let captured=false;
+ if(v<52){
+  const landing=(starts[turn]+v)%52;
+  // Four entry squares are safe in this prototype.
+  if(!starts.includes(landing)){
+   players.forEach((pl,p)=>{if(p!==turn)pl.tokens.forEach((ov,ot)=>{if(ov>=0&&ov<52&&(starts[p]+ov)%52===landing){pl.tokens[ot]=-1;captured=true;}});});
+  }
+ }
+ if(v===58){players[turn].done++;if(players[turn].done===4){gameOver=true;setStatus(`${names[turn]} wins LUDO STAR! 🎉`);alert(`${names[turn]} WINS LUDO STAR!`);}}
+ setStatus(v===58?`${names[turn]} brought a token home!`:captured?`${names[turn]} captured an opponent!`:`${names[turn]} moved token ${t+1}.`);
+ const extra=die===6||captured;
+ if(!gameOver)nextTurn(extra);
+}
+function hitTest(e){
+ const r=canvas.getBoundingClientRect(),scale=W/r.width;
+ const x=(e.clientX-r.left)*scale,y=(e.clientY-r.top)*scale;
+ let best=null,dist=1e9;
+ players[turn].tokens.forEach((v,t)=>{if(!valid.includes(t))return;const q=pos(turn,t),d=Math.hypot(q.x-x,q.y-y);if(d<dist){dist=d;best=t;}});
+ if(best!==null&&dist<48)move(best);
+}
+rollBtn.addEventListener('click',roll);newBtn.addEventListener('click',()=>{if(confirm('Start a new LUDO STAR game?'))reset();});
+canvas.addEventListener('pointerdown',hitTest);
+names.forEach((n,i)=>{const d=document.createElement('div');d.className='player';d.style.background=colors[i]+'25';d.style.color=colors[i];d.textContent=n;legend.appendChild(d);});
+reset();
+})();
+</script>
+</body></html>
